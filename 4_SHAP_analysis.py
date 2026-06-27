@@ -1,7 +1,5 @@
 """
-bgp_shap_analysis.py
-====================
-SHAP explainability analysis for XGBoost trained on volumetric and
+SHAP explainability analysis for Random Forest trained on volumetric and
 topological BGP feature sets.
 
 Input:
@@ -14,13 +12,11 @@ Output (saved to shap_outputs/):
     shap_barras_topologico.pdf    — Global feature importance bar plot
     shap_puntos_topologico.pdf    — Per-sample impact dot plot
 
-Usage:
-    python bgp_shap_analysis.py
 """
 
 import pandas as pd
 import numpy as np
-import xgboost as xgb
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 import shap
 import matplotlib.pyplot as plt
@@ -43,22 +39,34 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def apply_zscore(df, cols_X):
+def apply_log_and_zscore(df, cols_X):
     """
-    Event-isolated Z-score normalization.
-    The scaler is fitted exclusively on normal (baseline) windows of each
-    incident and applied to all windows of that incident.
-    This removes the Year Effect without leaking information across incidents.
+    1. Logarithmic Transformation to squash heavy right tails.
+    2. Event-isolated Z-score normalization. The scaler is fitted exclusively 
+       on normal (baseline) windows of each incident and applied to all windows.
     """
     df = df.copy()
+    
+    # 1. Logarithmic Transformation
+    for col in cols_X:
+        min_val = df[col].min()
+        if min_val < 0:
+            df[col] = np.log1p(df[col] - min_val)
+        else:
+            df[col] = np.log1p(df[col])
+            
+    # 2. Event-isolated Z-score normalization
     for base in df['Incidente_Base'].unique():
         idx_all    = df['Incidente_Base'] == base
         idx_normal = idx_all & (df['Label'] == 0)
+        
         if idx_normal.sum() == 0:
             continue
+            
         scaler = StandardScaler()
         scaler.fit(df.loc[idx_normal, cols_X])
         df.loc[idx_all, cols_X] = scaler.transform(df.loc[idx_all, cols_X])
+        
     return df
 
 
@@ -71,7 +79,7 @@ def generate_shap_figures(shap_values, X_test, paradigm_name):
     plt.figure(figsize=(10, 6))
     shap.summary_plot(shap_values, X_test, plot_type="bar", show=False)
     ax = plt.gca()
-    ax.set_title(f"Global Feature Importance (XGBoost) {paradigm_name}", fontsize=13)
+    ax.set_title(f"Global Feature Importance (Random Forest) {paradigm_name}", fontsize=13)
     ax.set_xlabel("mean(|SHAP value|) (average impact on model output magnitude)", fontsize=11)
     ax.set_ylabel("Feature", fontsize=11)
     plt.tight_layout()
@@ -84,7 +92,7 @@ def generate_shap_figures(shap_values, X_test, paradigm_name):
     plt.figure(figsize=(10, 6))
     shap.summary_plot(shap_values, X_test, show=False)
     ax = plt.gca()
-    ax.set_title(f"Feature Impact on Anomaly Predictions (XGBoost) {paradigm_name}", fontsize=13)
+    ax.set_title(f"Feature Impact on Anomaly Predictions (Random Forest) {paradigm_name}", fontsize=13)
     ax.set_xlabel("SHAP value (impact on model output)", fontsize=11)
     ax.set_ylabel("Feature", fontsize=11)
     try:
@@ -107,13 +115,9 @@ def generate_shap_figures(shap_values, X_test, paradigm_name):
 
 def run_shap(csv_file, paradigm_name):
     """
-    Load a feature CSV, apply event-isolated Z-score normalization, train
-    XGBoost on a LOEO-consistent split (90% train / 10% test incidents),
+    Load a feature CSV, apply Log + event-isolated Z-score normalization, train
+    Random Forest on a LOEO-consistent split (90% train / 10% test incidents),
     compute SHAP values, and save figures.
-
-    The 90/10 split ensures the test set is large enough for stable SHAP
-    estimates while maintaining the same event-isolation guarantee as the
-    full LOEO training loop.
     """
     print(f"\n{'='*65}")
     print(f"SHAP — {paradigm_name.upper()}")
@@ -127,9 +131,9 @@ def run_shap(csv_file, paradigm_name):
     drop_cols = ['Timestamp', 'Evento', 'Incidente_Base', 'Label', 'Colector', 'Categoria']
     cols_X = df.drop(columns=[c for c in drop_cols if c in df.columns]).columns.tolist()
 
-    # Event-isolated Z-score normalization
-    print("  Applying event-isolated Z-score normalization...")
-    df = apply_zscore(df, cols_X)
+    # Preprocessing: Log + Event-isolated Z-score
+    print("  Applying logarithmic transformation and event-isolated Z-score...")
+    df = apply_log_and_zscore(df, cols_X)
 
     # LOEO-consistent train/test split: 90% train incidents, 10% test incidents
     unique_incidents = df['Incidente_Base'].unique()
@@ -154,17 +158,26 @@ def run_shap(csv_file, paradigm_name):
           f"Test incidents: {len(test_incidents)}")
     print(f"  Train rows: {len(X_train)} | Test rows: {len(X_test)}")
 
-    # Train XGBoost
-    print("  Training XGBoost...")
-    model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_jobs=-1)
+    # Train Random Forest
+    print("  Training Random Forest...")
+    model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
     model.fit(X_train, y_train)
     acc = (model.predict(X_test) == y_test).mean()
     print(f"  Test accuracy: {acc:.4f}")
 
-    # Compute SHAP values using TreeExplainer (exact, no approximation)
+    # Compute SHAP values using TreeExplainer
     print("  Computing SHAP values (TreeExplainer)...")
-    explainer   = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_test)
+    explainer = shap.TreeExplainer(model)
+    shap_values_all = explainer.shap_values(X_test)
+    
+    # Random Forest returns a list of SHAP values (one array per class)
+    # We select index 1 to explain the positive class (Anomaly)
+    if isinstance(shap_values_all, list):
+        shap_values = shap_values_all[1]
+    elif len(shap_values_all.shape) == 3:
+        shap_values = shap_values_all[:, :, 1]
+    else:
+        shap_values = shap_values_all
 
     # Save figures
     print("  Generating figures...")
@@ -183,6 +196,6 @@ def run_shap(csv_file, paradigm_name):
 # ==============================================================================
 
 if __name__ == "__main__":
-    run_shap(FILE_VOL,   "volumetrico")
-    run_shap(FILE_GRAPH, "topologico")
+    run_shap(FILE_VOL,   "volumetric")
+    run_shap(FILE_GRAPH, "topological")
     print(f"\nSHAP analysis complete. Figures saved to: {OUTPUT_DIR}")

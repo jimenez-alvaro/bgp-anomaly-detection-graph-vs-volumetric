@@ -1,11 +1,9 @@
 """
-bgp_confusion_matrices.py
-=========================
-Generates cumulative LOEO-CV confusion matrices for XGBoost under both
+Generates cumulative LOEO-CV confusion matrices for Random Forest under both
 volumetric and topological feature paradigms.
 
 Each LOEO iteration holds out one complete incident (normal + attack windows),
-trains XGBoost on the remaining incidents, and accumulates predictions.
+trains Random Forest on the remaining incidents, and accumulates predictions.
 The final confusion matrix is built from all accumulated predictions across
 all iterations, giving a global picture of model errors.
 
@@ -16,9 +14,6 @@ Input:
 Output (saved to confusion_matrix_outputs/):
     matriz_confusion_volumetric_rrc04_final.pdf
     matriz_confusion_topological_rrc04_final.pdf
-
-Usage:
-    python bgp_confusion_matrices.py
 """
 
 import pandas as pd
@@ -28,7 +23,7 @@ import os
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-import xgboost as xgb
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
 
@@ -46,28 +41,40 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def apply_zscore(df, cols_X):
+def apply_log_and_zscore(df, cols_X):
     """
-    Event-isolated Z-score normalization.
-    The scaler is fitted exclusively on normal (baseline) windows of each
-    incident and applied to all windows of that incident.
-    This removes the Year Effect without leaking information across incidents.
+    1. Logarithmic Transformation to squash heavy right tails.
+    2. Event-isolated Z-score normalization. The scaler is fitted exclusively 
+       on normal (baseline) windows of each incident and applied to all windows.
     """
     df = df.copy()
+    
+    # 1. Logarithmic Transformation
+    for col in cols_X:
+        min_val = df[col].min()
+        if min_val < 0:
+            df[col] = np.log1p(df[col] - min_val)
+        else:
+            df[col] = np.log1p(df[col])
+            
+    # 2. Event-isolated Z-score normalization
     for base in df['Incidente_Base'].unique():
         idx_all    = df['Incidente_Base'] == base
         idx_normal = idx_all & (df['Label'] == 0)
+        
         if idx_normal.sum() == 0:
             continue
+            
         scaler = StandardScaler()
         scaler.fit(df.loc[idx_normal, cols_X])
         df.loc[idx_all, cols_X] = scaler.transform(df.loc[idx_all, cols_X])
+        
     return df
 
 
 def run_loeo(df, cols_X):
     """
-    Run the full LOEO-CV loop for XGBoost and return accumulated
+    Run the full LOEO-CV loop for Random Forest and return accumulated
     true labels and predictions across all iterations.
     """
     X         = df[cols_X].values
@@ -77,7 +84,8 @@ def run_loeo(df, cols_X):
 
     y_true_all, y_pred_all = [], []
 
-    model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_jobs=-1)
+    # Initialize Random Forest with exactly the same parameters as the LOEO script
+    model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
 
     for i, incident_test in enumerate(unique):
         mask_test  = incidents == incident_test
@@ -116,7 +124,7 @@ def plot_confusion_matrix(cm, paradigm_name, n_incidents, output_path):
         annot_kws={"size": 14}
     )
     plt.title(
-        f'Confusion Matrix XGBoost — {paradigm_name} Paradigm\n'
+        f'Confusion Matrix Random Forest — {paradigm_name} Paradigm\n'
         f'(Leave-One-Event-Out CV | {n_incidents} incidents)',
         fontsize=13, pad=15
     )
@@ -149,7 +157,8 @@ if __name__ == "__main__":
         print(f"  Unique incidents: {df['Incidente_Base'].nunique()} | "
               f"Total rows: {len(df)}")
 
-        df = apply_zscore(df, cols_X)
+        # Apply the updated mathematical preprocessing
+        df = apply_log_and_zscore(df, cols_X)
 
         # LOEO-CV
         y_true, y_pred, n_incidents = run_loeo(df, cols_X)

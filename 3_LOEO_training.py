@@ -17,13 +17,13 @@ Evaluation protocol:
     simulating real operational deployment.
 
 Normalization:
-    Event-isolated Z-score: the scaler is fitted exclusively on the normal
-    (baseline) windows of each incident and then applied to all windows of
-    that incident. This removes the Year Effect (Internet growth over 19 years)
-    without leaking information between train and test sets.
+    1. Logarithmic transformation: Applies log1p to compress heavy right tails
+       inherent to BGP volume counters and graph metrics like edges/degrees.
+    2. Event-isolated Z-score: the scaler is fitted exclusively on the normal
+       (baseline) windows of each incident and then applied to all windows of
+       that incident. This removes the Year Effect (Internet growth over 19 years)
+       without leaking information between train and test sets.
 
-Usage:
-    python bgp_loeo_training.py
 """
 
 import pandas as pd
@@ -125,11 +125,9 @@ def get_models():
 
 def preprocess(df):
     """
-    Add metadata columns and apply event-isolated Z-score normalization.
-
-    The scaler is fitted exclusively on normal (baseline) windows of each
-    incident and applied to all windows of that incident. This removes the
-    Year Effect without leaking information across incidents.
+    1. Apply Logarithmic transformation to reduce extreme right tails.
+    2. Add metadata columns.
+    3. Apply event-isolated Z-score normalization.
     """
     df["Incidente_Base"] = df["Evento"].apply(
         lambda x: re.sub(r'_(Normal|Hijack|Leak|Outage)$', '', x))
@@ -142,12 +140,23 @@ def preprocess(df):
         "Colector", "Categoria"
     ]).columns.tolist()
 
-    # Event-isolated Z-score normalization
+    # 1. Logarithmic Transformation (Squash heavy tails)
+    for col in cols_X:
+        min_val = df[col].min()
+        if min_val < 0:
+            # Shift data if there are negative values (e.g., assortativity)
+            df[col] = np.log1p(df[col] - min_val)
+        else:
+            df[col] = np.log1p(df[col])
+
+    # 2. Event-isolated Z-score normalization
     for base in df["Incidente_Base"].unique():
         idx_all    = df["Incidente_Base"] == base
         idx_normal = idx_all & (df["Label"] == 0)
+        
         if idx_normal.sum() == 0:
             continue
+            
         scaler = StandardScaler()
         scaler.fit(df.loc[idx_normal, cols_X])
         df.loc[idx_all, cols_X] = scaler.transform(df.loc[idx_all, cols_X])
