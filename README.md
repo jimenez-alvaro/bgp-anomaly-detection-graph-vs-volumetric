@@ -2,9 +2,9 @@
 
 Code and dataset pipeline for the paper:
 
-> **Graph Topology vs. Volumetric Features for BGP Anomaly Detection: A Large-Scale Empirical Evaluation**  
-> Álvaro Jiménez Martín, Shadi Motaali, Jorge E. López de Vergara Méndez  
-> Escuela Politécnica Superior, Universidad Autónoma de Madrid  
+> **Graph Topology vs. Volumetric Features for BGP Anomaly Detection: An Empirical Evaluation**  
+> Álvaro Jiménez Martín, Shadi Motaali, Jorge E. López de Vergara, Luis de Pedro  
+> Dept. Tecnología Electrónica y de las Comunicaciones, Escuela Politécnica Superior, Universidad Autónoma de Madrid  
 > Submitted to CNSM 2026
 
 ---
@@ -16,6 +16,7 @@ This repository contains the full reproducible pipeline for comparing volumetric
 Key contributions:
 - Large-scale controlled comparison: 120 incidents, 4 anomaly categories, 19-year span
 - Leave-One-Event-Out (LOEO) cross-validation to prevent information leakage between incidents
+- Logarithmic transformation to compress heavy-tailed distributions in network data
 - Event-isolated Z-score normalization to mitigate the Year Effect
 - SHAP-based explainability analysis
 
@@ -25,14 +26,14 @@ Key contributions:
 
 | Paradigm   | Model    | Accuracy | F1    | Recall |
 |------------|----------|----------|-------|--------|
-| Volumetric | LR       | 0.599    | 0.524 | 0.439  |
-| Volumetric | RF       | 0.693    | 0.615 | 0.488  |
-| Volumetric | XGBoost  | 0.716    | 0.671 | 0.577  |
-| Volumetric | MLP      | 0.702    | 0.665 | 0.588  |
-| **Topological** | LR  | 0.863    | 0.843 | 0.730  |
-| **Topological** | RF  | 0.969    | 0.968 | 0.944  |
-| **Topological** | XGBoost | 0.966 | 0.965 | 0.938 |
-| **Topological** | MLP | 0.969    | 0.969 | 0.942  |
+| Volumetric | LR       | 0.579    | 0.533 | 0.478  |
+| Volumetric | RF       | 0.679    | 0.611 | 0.502  |
+| Volumetric | XGBoost  | 0.689    | 0.648 | 0.570  |
+| Volumetric | MLP      | 0.679    | 0.645 | 0.581  |
+| **Topological** | LR  | 0.841    | 0.813 | 0.687  |
+| **Topological** | **RF**| **0.970**| **0.970**| **0.947**|
+| **Topological** | XGBoost | 0.965 | 0.964 | 0.937 |
+| **Topological** | MLP | 0.965    | 0.964 | 0.934  |
 
 Evaluated under strict LOEO cross-validation on rrc04.
 
@@ -85,7 +86,7 @@ BML must be installed separately following the [official BML documentation](http
 Downloads raw BGP data from RIPE RIS and extracts volumetric and topological features for all 120 incidents:
 
 ```bash
-python bgp_dataset_extraction.py
+python 1_Extraction.py
 ```
 
 Output: `dataset_grande/` with four category subfolders, each containing JSON feature files.
@@ -95,7 +96,7 @@ Output: `dataset_grande/` with four category subfolders, each containing JSON fe
 ### Step 2 — Consolidate to CSV
 
 ```bash
-python bgp_json_to_csv.py
+python 2_Json_to_csv.py 
 ```
 
 Output:
@@ -107,7 +108,7 @@ Move both files to `dataset_csv_grande/` before running the next steps.
 ### Step 3 — Train models (LOEO-CV)
 
 ```bash
-python bgp_loeo_training.py
+python 3_LOEO_training.py
 ```
 
 Output: `resultados_LOEO_final.csv` with global and per-category metrics for all models.
@@ -115,7 +116,7 @@ Output: `resultados_LOEO_final.csv` with global and per-category metrics for all
 ### Step 4 — SHAP analysis
 
 ```bash
-python bgp_shap_analysis.py
+python 4_SHAP_analysis.py
 ```
 
 Output: bar and dot plots in `shap_outputs/`.
@@ -123,7 +124,7 @@ Output: bar and dot plots in `shap_outputs/`.
 ### Step 5 — Confusion matrices
 
 ```bash
-python bgp_confusion_matrices.py
+python 5_Confusion_matrices.py
 ```
 
 Output: PDF confusion matrices in `confusion_matrix_outputs/`.
@@ -148,9 +149,9 @@ If you use this code or dataset pipeline in your research, please cite:
 ```bibtex
 @inproceedings{jimenez2026bgp,
   title     = {Graph Topology vs. Volumetric Features for {BGP} Anomaly Detection:
-               A Large-Scale Empirical Evaluation},
+               An Empirical Evaluation},
   author    = {Jim\'enez Mart\'in, \'Alvaro and Motaali, Shadi and
-               L\'opez de Vergara M\'endez, Jorge E.},
+               L\'opez de Vergara, Jorge E. and de Pedro, Luis},
   booktitle = {Proc. 22nd Int. Conf. Network and Service Management (CNSM)},
   year      = {2026},
   address   = {Alcal\'a de Henares, Spain}
